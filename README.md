@@ -78,14 +78,15 @@ chmod +x ~/.local/bin/claude-buddy-swap
 # 基础：只选物种（属性随机）
 claude-buddy-swap 9187
 
-# 指定某个属性为 100（其余随机）
+# 指定一个或多个属性为 100（其余随机）
 claude-buddy-swap 9187 --peak WISDOM
+claude-buddy-swap 9187 --peak DEBUGGING WISDOM PATIENCE
 
 # 五维全部 100
 claude-buddy-swap 9187 --maxstats
 ```
 
-`--peak` 支持的属性名：`DEBUGGING`、`PATIENCE`、`CHAOS`、`WISDOM`、`SNARK`
+`--peak` 支持的属性名：`DEBUGGING`、`PATIENCE`、`CHAOS`、`WISDOM`、`SNARK`，可以空格分隔写多个。
 
 脚本会自动完成：备份原始二进制 → 从干净备份复制 → patch 权重和 salt → 清除旧宠物灵魂。
 

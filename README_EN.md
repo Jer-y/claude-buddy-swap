@@ -78,14 +78,15 @@ chmod +x ~/.local/bin/claude-buddy-swap
 # Basic: choose species only (stats are random)
 claude-buddy-swap 9187
 
-# Pin a specific stat to 100 (rest stay random)
+# Pin one or more stats to 100 (rest stay random)
 claude-buddy-swap 9187 --peak WISDOM
+claude-buddy-swap 9187 --peak DEBUGGING WISDOM PATIENCE
 
 # All 5 stats = 100
 claude-buddy-swap 9187 --maxstats
 ```
 
-`--peak` accepts: `DEBUGGING`, `PATIENCE`, `CHAOS`, `WISDOM`, `SNARK`
+`--peak` accepts: `DEBUGGING`, `PATIENCE`, `CHAOS`, `WISDOM`, `SNARK` — space-separated, any combination.
 
 The script automatically: backs up the original binary → copies from clean backup → patches weights + salt → clears old companion soul.
 

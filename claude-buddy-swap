@@ -117,18 +117,28 @@ if maxstats == '1':
     label = 'all stats → 100'
 
 elif peak_stat:
-    peak_stat = peak_stat.upper()
-    if peak_stat not in STAT_NAMES:
-        print(f'ERROR: unknown stat \"{peak_stat}\", must be one of: {STAT_NAMES}')
-        sys.exit(1)
-    idx = STAT_NAMES.index(peak_stat)
-    # Force peak to bi[idx]=100, dump random (not peak), normal random
-    core = (f'let q=pE4[\$],_=jvH(H,bi);while(_===bi[{idx}])_=jvH(H,bi);'
-            f'let f={{}};for(let A of bi)if(A===bi[{idx}])f[A]=100;'
-            f'else if(A===_)f[A]=Math.max(1,q-10+Math.floor(H()*15));'
-            f'else f[A]=q+Math.floor(H()*40)').encode()
+    names = [s.strip().upper() for s in peak_stat.split(',') if s.strip()]
+    indices = []
+    for n in names:
+        if n not in STAT_NAMES:
+            print(f'ERROR: unknown stat \"{n}\", must be one of: {STAT_NAMES}')
+            sys.exit(1)
+        indices.append(STAT_NAMES.index(n))
+
+    if len(indices) == 5:
+        # All 5 selected = same as --maxstats
+        core = b'let f={};for(let A of bi)f[A]=100'
+        label = 'all stats → 100'
+    else:
+        # Build condition: A===bi[0]||A===bi[3] etc.
+        cond = '||'.join(f'A===bi[{i}]' for i in indices)
+        core = (f'let q=pE4[$],_=jvH(H,bi);let f={{}};'
+                f'for(let A of bi)'
+                f'if({cond})f[A]=100;'
+                f'else if(A===_)f[A]=Math.max(1,q-10+Math.floor(H()*15));'
+                f'else f[A]=q+Math.floor(H()*40)').encode()
+        label = ', '.join(names) + ' → 100 (rest random)'
     new_body = core
-    label = f'{peak_stat} → 100 (rest random)'
 
 if new_body is not None:
     pad = len(old_body) - len(new_body)
@@ -397,7 +407,9 @@ case "${1:-}" in
         echo ""
         echo "  claude-buddy-swap <SALT>                       切换宠物 (如: 9187)"
         echo "  claude-buddy-swap <SALT> --maxstats            切换宠物 + 五维全 100"
-        echo "  claude-buddy-swap <SALT> --peak WISDOM         切换宠物 + 指定 WISDOM=100"
+        echo "  claude-buddy-swap <SALT> --peak WISDOM         指定 WISDOM=100"
+        echo "  claude-buddy-swap <SALT> --peak DEBUGGING WISDOM PATIENCE"
+        echo "                                                 多个属性同时=100"
         echo "  claude-buddy-swap --list                       综合最优排行 (默认前30)"
         echo "  claude-buddy-swap --list --top 50              显示前50名"
         echo "  claude-buddy-swap --list --sort dpw            按 D+P+W 排序"
@@ -437,12 +449,18 @@ esac
 
 SALT_NUM="$1"
 MAXSTATS=""
-PEAK_STAT=""
+PEAK_STATS=""
 shift
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --maxstats) MAXSTATS="1"; shift ;;
-        --peak)     PEAK_STAT="$2"; shift 2 ;;
+        --peak)
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                PEAK_STATS="${PEAK_STATS:+$PEAK_STATS,}$1"
+                shift
+            done
+            ;;
         *) shift ;;
     esac
 done
@@ -458,7 +476,7 @@ fi
 BIN=$(find_binary)
 [[ -z "$BIN" ]] && { red "找不到 Claude 二进制"; exit 1; }
 
-bold "🔄 切换宠物 → salt $SALT_NUM${MAXSTATS:+ (全属性 100)}${PEAK_STAT:+ (${PEAK_STAT^^}=100)}"
+bold "🔄 切换宠物 → salt $SALT_NUM${MAXSTATS:+ (全属性 100)}${PEAK_STATS:+ (${PEAK_STATS^^}=100)}"
 echo ""
 
 # 检查是否在运行
@@ -477,7 +495,7 @@ ORIGINAL=$(ensure_original "$BIN")
 cyan "[2/3] Patching..."
 cp "$ORIGINAL" "$BIN"
 chmod +x "$BIN"
-patch_binary "$BIN" "$SALT_NUM" "$MAXSTATS" "$PEAK_STAT"
+patch_binary "$BIN" "$SALT_NUM" "$MAXSTATS" "$PEAK_STATS"
 
 # Step 3: 清除旧宠物
 cyan "[3/3] 清除旧宠物数据..."
