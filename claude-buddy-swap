@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+#  claude-buddy-swap — 一键切换 legendary 宠物
+#
+#  Usage:
+#    claude-buddy-swap 9187        # 换成 salt 9187 的宠物
+#    claude-buddy-swap 407         # 3位数也行
+#    claude-buddy-swap --list      # 查看推荐列表
+#    claude-buddy-swap --current   # 查看当前宠物
+#    claude-buddy-swap --restore   # 恢复原始未修改版本
+# ============================================================
+
+VERSIONS_DIR="$HOME/.local/share/claude/versions"
+CLAUDE_JSON="$HOME/.claude.json"
+BUN="$HOME/.bun/bin/bun"
+
+red()    { printf '\033[31m%s\033[0m\n' "$*"; }
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+cyan()   { printf '\033[36m%s\033[0m\n' "$*"; }
+bold()   { printf '\033[1m%s\033[0m\n' "$*"; }
+
+# ---- 找到当前版本二进制 ----
+find_binary() {
+    local bin
+    bin=$(readlink -f "$HOME/.local/bin/claude" 2>/dev/null) || true
+    if [[ -z "$bin" || ! -f "$bin" ]]; then
+        bin=$(ls -t "$VERSIONS_DIR"/[0-9]* 2>/dev/null | grep -v '\.' | head -1)
+    fi
+    echo "$bin"
+}
+
+# ---- 找到或创建 .original 备份 ----
+ensure_original() {
+    local bin="$1"
+    local original="${bin}.original"
+    if [[ ! -f "$original" ]]; then
+        cp "$bin" "$original"
+        cyan "  备份原始二进制 → ${original##*/}"
+    fi
+    echo "$original"
+}
+
+# ---- 检查 Claude 是否在运行 ----
+check_running() {
+    local bin="$1"
+    if fuser "$bin" &>/dev/null; then
+        return 0  # running
+    fi
+    return 1  # not running
+}
+
+# ---- 执行二进制 patch ----
+patch_binary() {
+    local target="$1"
+    local salt_num="$2"
+
+    python3 -c "
+import sys, re
+
+path, salt_num = sys.argv[1], sys.argv[2]
+data = open(path, 'rb').read()
+
+changes = []
+
+# 1. Patch weights
+old_w = b'common:60,uncommon:25,rare:10,epic:4,legendary:1'
+new_w = b'common: 0,uncommon: 0,rare: 0,epic:0,legendary:1'
+if data.count(old_w) > 0:
+    data = data.replace(old_w, new_w)
+    changes.append('weights → legendary 100%')
+elif data.count(new_w) > 0:
+    changes.append('weights already patched')
+else:
+    print('ERROR: weight pattern not found in binary')
+    sys.exit(1)
+
+# 2. Patch salt
+digits = len(salt_num)
+if digits == 3:
+    new_salt = f'friend-2026-{salt_num}'.encode()
+elif digits == 4:
+    new_salt = f'friend2026-{salt_num}'.encode()
+else:
+    print(f'ERROR: salt must be 3 or 4 digits, got {digits}')
+    sys.exit(1)
+
+assert len(new_salt) == 15, f'Salt length error: {len(new_salt)}'
+
+found = {s for s in re.findall(rb'friend-?2026-\d{3,4}', data) if len(s) == 15}
+for old_salt in found:
+    if old_salt != new_salt:
+        data = data.replace(old_salt, new_salt)
+        changes.append(f'salt {old_salt.decode()} → {new_salt.decode()}')
+if not found:
+    print('ERROR: no salt pattern found in binary')
+    sys.exit(1)
+
+changes.append(f'final salt: {new_salt.decode()}')
+
+open(path, 'wb').write(data)
+for c in changes:
+    print(f'  {c}')
+" "$target" "$salt_num"
+}
+
+# ---- 清除旧宠物灵魂 ----
+clear_companion() {
+    if [[ ! -f "$CLAUDE_JSON" ]]; then
+        return
+    fi
+    python3 -c "
+import json, sys
+path = sys.argv[1]
+with open(path, 'r') as f:
+    data = json.load(f)
+if 'companion' in data:
+    old_name = data['companion'].get('name', '?')
+    del data['companion']
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f'  清除旧宠物: {old_name}')
+else:
+    print('  无旧宠物数据')
+" "$CLAUDE_JSON"
+}
+
+# ---- 查看当前宠物 ----
+show_current() {
+    local bin
+    bin=$(find_binary)
+    [[ -z "$bin" ]] && { red "找不到 Claude 二进制"; exit 1; }
+
+    python3 -c "
+import re, json, sys
+
+bin_path, config_path = sys.argv[1], sys.argv[2]
+data = open(bin_path, 'rb').read()
+
+# Check weights
+old_w = b'common:60,uncommon:25,rare:10,epic:4,legendary:1'
+new_w = b'common: 0,uncommon: 0,rare: 0,epic:0,legendary:1'
+patched = data.count(new_w) > 0
+
+# Check salt
+salts = {s.decode() for s in re.findall(rb'friend-?2026-\d{3,4}', data) if len(s) == 15}
+salt = salts.pop() if salts else '?'
+
+# Check companion soul
+name = personality = '(未孵化)'
+try:
+    with open(config_path) as f:
+        cfg = json.load(f)
+    if 'companion' in cfg:
+        name = cfg['companion'].get('name', '?')
+        personality = cfg['companion'].get('personality', '?')
+except: pass
+
+print(f'  Binary:      {bin_path}')
+print(f'  Patched:     {\"✅ legendary 100%\" if patched else \"❌ 原始权重\"}')
+print(f'  Salt:        {salt}')
+print(f'  Name:        {name}')
+print(f'  Personality: {personality}')
+" "$bin" "$CLAUDE_JSON"
+}
+
+# ---- 推荐列表 ----
+show_list() {
+    local sort_by="${1:-score}"
+    local filter_species="${2:-}"
+    local limit="${3:-30}"
+
+    [[ ! -x "$BUN" ]] && { red "需要 bun 来计算: $BUN"; exit 1; }
+
+    # 读取当前 userId
+    local user_id
+    user_id=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    print(data.get('userID', data.get('userId', 'anon')))
+except: print('anon')
+" "$CLAUDE_JSON" 2>/dev/null)
+
+    "$BUN" -e "
+const SPECIES = ['duck','goose','blob','cat','dragon','octopus','owl','penguin',
+                 'turtle','snail','ghost','axolotl','capybara','cactus','robot',
+                 'rabbit','mushroom','chonk'];
+const RARITIES = ['common','uncommon','rare','epic','legendary'];
+const WEIGHTS = {common:0,uncommon:0,rare:0,epic:0,legendary:1};
+const EYES = ['·','✦','×','◉','@','°'];
+const HATS = ['none','crown','tophat','propeller','halo','wizard','beanie','tinyduck'];
+const STAT_NAMES = ['DEBUGGING','PATIENCE','CHAOS','WISDOM','SNARK'];
+const EMOJI = {duck:'🦆',goose:'🪿',blob:'🫠',cat:'🐱',dragon:'🐉',octopus:'🐙',owl:'🦉',penguin:'🐧',turtle:'🐢',snail:'🐌',ghost:'👻',axolotl:'🦎',capybara:'🦫',cactus:'🌵',robot:'🤖',rabbit:'🐰',mushroom:'🍄',chonk:'🐈'};
+const HAT_EMOJI = {none:'—',crown:'👑',tophat:'🎩',propeller:'🧢',halo:'😇',wizard:'🧙',beanie:'🧶',tinyduck:'🐤'};
+
+function hashString(s) { return Number(BigInt(Bun.hash(s)) & 0xffffffffn); }
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function() { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
+function rollRarity(rng) { let total = Object.values(WEIGHTS).reduce((a,b)=>a+b,0), roll = rng()*total;
+  for (const r of RARITIES) { roll -= WEIGHTS[r]; if (roll<0) return r; } return 'common'; }
+function rollStats(rng, rarity) {
+  const floor = {common:5,uncommon:15,rare:25,epic:35,legendary:50}[rarity];
+  const peak = pick(rng, STAT_NAMES);
+  let dump = pick(rng, STAT_NAMES);
+  while (dump === peak) dump = pick(rng, STAT_NAMES);
+  const stats = {};
+  for (const name of STAT_NAMES) {
+    if (name === peak) stats[name] = Math.min(100, floor + 50 + Math.floor(rng() * 30));
+    else if (name === dump) stats[name] = Math.max(1, floor - 10 + Math.floor(rng() * 15));
+    else stats[name] = floor + Math.floor(rng() * 40);
+  }
+  return stats;
+}
+function simulate(userId, saltStr) {
+  const key = userId + saltStr, seed = hashString(key), rng = mulberry32(seed);
+  const rarity = rollRarity(rng), species = pick(rng, SPECIES), eye = pick(rng, EYES);
+  const hat = rarity==='common'?'none':pick(rng,HATS), shiny = rng()<0.01;
+  const stats = rollStats(rng, rarity);
+  return { rarity, species, eye, hat, shiny, stats };
+}
+
+const userId = process.argv[1] || 'anon';
+const sortBy = process.argv[2] || 'score';
+const filterSpecies = process.argv[3] || '';
+const limit = parseInt(process.argv[4] || '30');
+
+const results = [];
+for (let i = 401; i < 1000; i++) {
+  const r = simulate(userId, 'friend-2026-' + i);
+  results.push({ salt: i, saltStr: 'friend-2026-' + i, ...r });
+}
+for (let i = 1000; i < 10000; i++) {
+  const salt = 'friend2026-' + i;
+  if (salt.length !== 15) continue;
+  results.push({ salt: i, saltStr: salt, ...simulate(userId, salt) });
+}
+
+// Compute scores
+const scored = results.map(r => {
+  const s = r.stats;
+  const dpw = s.DEBUGGING + s.PATIENCE + s.WISDOM;
+  const score = dpw - s.CHAOS - s.SNARK;
+  const total = Object.values(s).reduce((a,b)=>a+b, 0);
+  return { ...r, dpw, score, total };
+});
+
+// Filter by species if specified
+let filtered = filterSpecies
+  ? scored.filter(r => r.species === filterSpecies)
+  : scored;
+
+// Sort
+if (sortBy === 'score') {
+  filtered.sort((a, b) => b.score - a.score);
+} else if (sortBy === 'dpw') {
+  filtered.sort((a, b) => b.dpw - a.dpw);
+} else if (sortBy === 'total') {
+  filtered.sort((a, b) => b.total - a.total);
+} else if (sortBy === 'chaos') {
+  filtered.sort((a, b) => a.stats.CHAOS - b.stats.CHAOS);
+}
+
+const title = filterSpecies
+  ? \`\${EMOJI[filterSpecies] || ''} \${filterSpecies} 排行\`
+  : { score: '综合最优 (D+P+W高, CHAOS+SNARK低)',
+      dpw: 'D+P+W 三项总和最高',
+      total: '五维总属性最高',
+      chaos: 'CHAOS 最低' }[sortBy] || '排行';
+
+const showDpw = sortBy === 'dpw' || sortBy === 'score';
+
+console.log(\`🏆 \${title}\`);
+console.log('');
+if (showDpw) {
+  console.log('  #   SALT   物种          眼  帽子          DEBUG PATCE [CHA] WISDM [SNK]  D+P+W');
+} else {
+  console.log('  #   SALT   物种          眼  帽子          DEBUG PATCE CHAOS WISDM SNARK  Total');
+}
+console.log('  ' + '─'.repeat(82));
+
+const shown = filtered.slice(0, limit);
+for (let i = 0; i < shown.length; i++) {
+  const r = shown[i];
+  const s = r.stats;
+  const emoji = EMOJI[r.species] || '  ';
+  const hatE = HAT_EMOJI[r.hat] || '  ';
+  const shiny = r.shiny ? ' ✨' : '';
+  let line = String(i+1).padStart(3) + '  ' + String(r.salt).padStart(5) + '   ' +
+    emoji + ' ' + r.species.padEnd(10) +
+    r.eye.padStart(3) + '  ' + hatE + ' ' + r.hat.padEnd(10);
+  if (showDpw) {
+    line += String(s.DEBUGGING).padStart(5) + String(s.PATIENCE).padStart(6) +
+      '  [' + String(s.CHAOS).padStart(2) + ']' +
+      String(s.WISDOM).padStart(6) +
+      '  [' + String(s.SNARK).padStart(2) + ']' +
+      String(r.dpw).padStart(7);
+  } else {
+    line += String(s.DEBUGGING).padStart(5) + String(s.PATIENCE).padStart(6) +
+      String(s.CHAOS).padStart(6) +
+      String(s.WISDOM).padStart(6) +
+      String(s.SNARK).padStart(6) +
+      String(r.total).padStart(7);
+  }
+  console.log(line + shiny);
+}
+
+console.log('');
+console.log('  用法: claude-buddy-swap <SALT>');
+if (!filterSpecies) {
+  console.log('  筛选: claude-buddy-swap --list [--sort score|dpw|total|chaos] [--species dragon] [--top N]');
+}
+" "$user_id" "$sort_by" "$filter_species" "$limit"
+}
+
+# ---- 恢复原始 ----
+do_restore() {
+    local bin
+    bin=$(find_binary)
+    [[ -z "$bin" ]] && { red "找不到 Claude 二进制"; exit 1; }
+    local original="${bin}.original"
+    [[ ! -f "$original" ]] && { red "找不到原始备份 ${original}"; exit 1; }
+
+    if check_running "$bin"; then
+        red "Claude 正在运行，请先退出 (Ctrl+C 或 /exit)"
+        exit 1
+    fi
+
+    cp "$original" "$bin"
+    chmod +x "$bin"
+    clear_companion
+    green "✅ 已恢复原始版本"
+}
+
+# ============================================================
+#  Main
+# ============================================================
+
+case "${1:-}" in
+    ""|"-h"|"--help")
+        bold "claude-buddy-swap — 一键切换 legendary 宠物"
+        echo ""
+        echo "  claude-buddy-swap <SALT>                       切换宠物 (如: 9187)"
+        echo "  claude-buddy-swap --list                       综合最优排行 (默认前30)"
+        echo "  claude-buddy-swap --list --top 50              显示前50名"
+        echo "  claude-buddy-swap --list --sort dpw            按 D+P+W 排序"
+        echo "  claude-buddy-swap --list --sort total          按五维总和排序"
+        echo "  claude-buddy-swap --list --sort chaos          按 CHAOS 从低到高"
+        echo "  claude-buddy-swap --list --species dragon      只看龙"
+        echo "  claude-buddy-swap --list --species robot --top 10"
+        echo "  claude-buddy-swap --current                    查看当前宠物状态"
+        echo "  claude-buddy-swap --restore                    恢复原始未修改版本"
+        exit 0
+        ;;
+    "--list"|"-l")
+        # 解析 --list 后面的可选参数
+        shift
+        _sort="total"; _species=""; _top="30"
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --sort)    _sort="$2"; shift 2 ;;
+                --species) _species="$2"; shift 2 ;;
+                --top)     _top="$2"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        show_list "$_sort" "$_species" "$_top"
+        exit 0
+        ;;
+    "--current"|"-c")
+        cyan "当前宠物状态:"
+        show_current
+        exit 0
+        ;;
+    "--restore"|"-r")
+        do_restore
+        exit 0
+        ;;
+esac
+
+SALT_NUM="$1"
+
+# 校验 salt
+if ! [[ "$SALT_NUM" =~ ^[0-9]{3,4}$ ]]; then
+    red "ERROR: salt 必须是 3-4 位数字, 收到: $SALT_NUM"
+    echo "  试试: claude-buddy-swap --list"
+    exit 1
+fi
+
+# 找二进制
+BIN=$(find_binary)
+[[ -z "$BIN" ]] && { red "找不到 Claude 二进制"; exit 1; }
+
+bold "🔄 切换宠物 → salt $SALT_NUM"
+echo ""
+
+# 检查是否在运行
+if check_running "$BIN"; then
+    red "⚠  Claude 正在运行，无法 patch 当前二进制"
+    echo ""
+    yellow "请先退出 Claude，再运行本脚本"
+    exit 1
+fi
+
+# Step 1: 确保有原始备份
+cyan "[1/3] 检查备份..."
+ORIGINAL=$(ensure_original "$BIN")
+
+# Step 2: 从原始版本复制一份干净的，再 patch
+cyan "[2/3] Patching..."
+cp "$ORIGINAL" "$BIN"
+chmod +x "$BIN"
+patch_binary "$BIN" "$SALT_NUM"
+
+# Step 3: 清除旧宠物
+cyan "[3/3] 清除旧宠物数据..."
+clear_companion
+
+echo ""
+green "✅ 完成! 启动 claude 后输入 /buddy 孵化新宠物"
