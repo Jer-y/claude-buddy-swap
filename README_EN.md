@@ -57,86 +57,103 @@ The companion's "bones" (species, rarity, stats) are regenerated from `hash(user
 ## Installation
 
 ```bash
-# Recommended: Python version (cross-platform — Linux / macOS / Windows)
-cp claude-buddy-swap.py ~/.local/bin/claude-buddy-swap.py
-chmod +x ~/.local/bin/claude-buddy-swap.py
-
-# Or run directly
-python3 claude-buddy-swap.py 9187
-```
-
-**Windows (PowerShell):**
-```powershell
-copy claude-buddy-swap.py $env:USERPROFILE\.local\bin\claude-buddy-swap.py
-python claude-buddy-swap.py 9187
+# Clone the repo
+git clone https://github.com/Jer-y/claude-buddy-swap.git
+cd claude-buddy-swap
 ```
 
 ### Requirements
 
-- **Python 3.8+** — main script runtime
+- **Python 3.8+**
 - **Claude Code** — binary installed at `~/.local/share/claude/versions/`
 - **Bun** (optional) — only needed for `--list` leaderboard (uses `Bun.hash` for Wyhash simulation)
 
-> The legacy bash script `claude-buddy-swap` is still included for Linux/macOS users who prefer it.
+## Quick start
+
+```bash
+# Show help
+python3 claude-buddy-swap.py -h
+
+# 1. Browse the leaderboard and pick a salt
+python3 claude-buddy-swap.py --list
+
+# 2. Exit Claude Code (required — the binary can't be overwritten while running)
+
+# 3. Swap
+python3 claude-buddy-swap.py 9187
+```
+
+Then launch Claude Code and type `/buddy` to hatch your new companion.
 
 ## Usage
 
-> **Important:** You must exit Claude Code before running this script (the binary cannot be overwritten while running).
-
-### Switch companion
+### Swap companion
 
 ```bash
-# Basic: choose species only (stats are random)
-claude-buddy-swap 9187
+# Basic: choose species (stats are random)
+python3 claude-buddy-swap.py 9187
 
 # Pin one or more stats to 100 (rest stay random)
-claude-buddy-swap 9187 --peak WISDOM
-claude-buddy-swap 9187 --peak DEBUGGING WISDOM PATIENCE
+python3 claude-buddy-swap.py 9187 --peak WISDOM
+python3 claude-buddy-swap.py 9187 --peak DEBUGGING WISDOM PATIENCE
 
 # All 5 stats = 100
-claude-buddy-swap 9187 --maxstats
+python3 claude-buddy-swap.py 9187 --maxstats
 ```
 
 `--peak` accepts: `DEBUGGING`, `PATIENCE`, `CHAOS`, `WISDOM`, `SNARK` — space-separated, any combination.
 
-The script automatically: backs up the original binary → copies from clean backup → patches weights + salt → clears old companion soul.
+The script automatically handles the full flow: back up original binary → copy from clean backup → patch weights + salt → clear old companion soul.
 
-After launching Claude Code, type `/buddy` to hatch your new companion.
-
-### Browse rankings
+### Browse leaderboard
 
 ```bash
-# Default: sort by total stats (all 5 dimensions)
-claude-buddy-swap --list
+# Default: sort by total stats (top 30)
+python3 claude-buddy-swap.py --list
 
 # Show top 50
-claude-buddy-swap --list --top 50
+python3 claude-buddy-swap.py --list --top 50
 
 # Sort by D+P+W (CHAOS and SNARK shown as secondary)
-claude-buddy-swap --list --sort dpw
+python3 claude-buddy-swap.py --list --sort dpw
 
 # Sort by composite score (high D+P+W, low CHAOS+SNARK)
-claude-buddy-swap --list --sort score
+python3 claude-buddy-swap.py --list --sort score
 
 # Sort by CHAOS ascending
-claude-buddy-swap --list --sort chaos
+python3 claude-buddy-swap.py --list --sort chaos
 
 # Filter by species
-claude-buddy-swap --list --species dragon
-claude-buddy-swap --list --species robot --top 10
+python3 claude-buddy-swap.py --list --species dragon
+python3 claude-buddy-swap.py --list --species robot --top 10
 ```
 
-### Check current status
+### Other commands
 
 ```bash
-claude-buddy-swap --current
+# Show current companion status
+python3 claude-buddy-swap.py --current
+
+# Restore original unpatched binary
+python3 claude-buddy-swap.py --restore
+
+# Show full help
+python3 claude-buddy-swap.py -h
 ```
 
-### Restore original
-
-```bash
-claude-buddy-swap --restore
-```
+> **Tip:** You can add the script to your PATH for convenience:
+> ```bash
+> # Linux / macOS
+> cp claude-buddy-swap.py ~/.local/bin/claude-buddy-swap
+> chmod +x ~/.local/bin/claude-buddy-swap
+> # Then just use:
+> claude-buddy-swap --list
+> ```
+>
+> **Windows (PowerShell):**
+> ```powershell
+> python claude-buddy-swap.py --list
+> ```
 
 ## Stats
 
