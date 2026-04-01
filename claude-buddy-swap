@@ -57,14 +57,16 @@ patch_binary() {
     local target="$1"
     local salt_num="$2"
     local maxstats="$3"
+    local peak_stat="$4"
 
     python3 -c "
 import sys, re
 
-path, salt_num, maxstats = sys.argv[1], sys.argv[2], sys.argv[3]
+path, salt_num, maxstats, peak_stat = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 data = open(path, 'rb').read()
 
 changes = []
+STAT_NAMES = ['DEBUGGING', 'PATIENCE', 'CHAOS', 'WISDOM', 'SNARK']
 
 # 1. Patch weights
 old_w = b'common:60,uncommon:25,rare:10,epic:4,legendary:1'
@@ -100,34 +102,57 @@ if not found:
     sys.exit(1)
 changes.append(f'final salt: {new_salt.decode()}')
 
-# 3. Patch stats if --maxstats
+# 3. Patch stats
+old_body = (b'let q=pE4[\$],K=jvH(H,bi),_=jvH(H,bi);while(_===K)_=jvH(H,bi);'
+            b'let f={};for(let A of bi)if(A===K)f[A]=Math.min(100,q+50+Math.floor(H()*30));'
+            b'else if(A===_)f[A]=Math.max(1,q-10+Math.floor(H()*15));'
+            b'else f[A]=q+Math.floor(H()*40)')
+
+new_body = None
+
 if maxstats == '1':
-    old_body = (b'let q=pE4[\$],K=jvH(H,bi),_=jvH(H,bi);while(_===K)_=jvH(H,bi);'
-                b'let f={};for(let A of bi)if(A===K)f[A]=Math.min(100,q+50+Math.floor(H()*30));'
-                b'else if(A===_)f[A]=Math.max(1,q-10+Math.floor(H()*15));'
-                b'else f[A]=q+Math.floor(H()*40)')
+    # All stats = 100
     core = b'let f={};for(let A of bi)f[A]=100'
-    pad = len(old_body) - len(core)
     new_body = core
+    label = 'all stats → 100'
+
+elif peak_stat:
+    peak_stat = peak_stat.upper()
+    if peak_stat not in STAT_NAMES:
+        print(f'ERROR: unknown stat \"{peak_stat}\", must be one of: {STAT_NAMES}')
+        sys.exit(1)
+    idx = STAT_NAMES.index(peak_stat)
+    # Force peak to bi[idx]=100, dump random (not peak), normal random
+    core = (f'let q=pE4[\$],_=jvH(H,bi);while(_===bi[{idx}])_=jvH(H,bi);'
+            f'let f={{}};for(let A of bi)if(A===bi[{idx}])f[A]=100;'
+            f'else if(A===_)f[A]=Math.max(1,q-10+Math.floor(H()*15));'
+            f'else f[A]=q+Math.floor(H()*40)').encode()
+    new_body = core
+    label = f'{peak_stat} → 100 (rest random)'
+
+if new_body is not None:
+    pad = len(old_body) - len(new_body)
     while pad >= 4:
         new_body += b';H()'
         pad -= 4
-    if pad == 2:
+    if pad == 3:
+        new_body += b';0;'
+    elif pad == 2:
         new_body += b';0'
     elif pad == 1:
         new_body += b';'
-    assert len(new_body) == len(old_body), f'stats body length mismatch: {len(new_body)} != {len(old_body)}'
+    assert len(new_body) == len(old_body), f'body length mismatch: {len(new_body)} != {len(old_body)}'
     count = data.count(old_body)
     if count > 0:
         data = data.replace(old_body, new_body)
-        changes.append(f'stats → all 100 ({count} occurrence(s))')
+        changes.append(f'stats: {label} ({count}x)')
     else:
         print('WARNING: rollStats body not found, stats not patched')
 
 open(path, 'wb').write(data)
 for c in changes:
     print(f'  {c}')
-" "$target" "$salt_num" "${maxstats:-0}"
+" "$target" "$salt_num" "${maxstats:-0}" "${peak_stat:-}"
 }
 
 # ---- 清除旧宠物灵魂 ----
@@ -372,6 +397,7 @@ case "${1:-}" in
         echo ""
         echo "  claude-buddy-swap <SALT>                       切换宠物 (如: 9187)"
         echo "  claude-buddy-swap <SALT> --maxstats            切换宠物 + 五维全 100"
+        echo "  claude-buddy-swap <SALT> --peak WISDOM         切换宠物 + 指定 WISDOM=100"
         echo "  claude-buddy-swap --list                       综合最优排行 (默认前30)"
         echo "  claude-buddy-swap --list --top 50              显示前50名"
         echo "  claude-buddy-swap --list --sort dpw            按 D+P+W 排序"
@@ -411,10 +437,12 @@ esac
 
 SALT_NUM="$1"
 MAXSTATS=""
+PEAK_STAT=""
 shift
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --maxstats) MAXSTATS="1"; shift ;;
+        --peak)     PEAK_STAT="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -430,7 +458,7 @@ fi
 BIN=$(find_binary)
 [[ -z "$BIN" ]] && { red "找不到 Claude 二进制"; exit 1; }
 
-bold "🔄 切换宠物 → salt $SALT_NUM${MAXSTATS:+ (全属性 100)}"
+bold "🔄 切换宠物 → salt $SALT_NUM${MAXSTATS:+ (全属性 100)}${PEAK_STAT:+ (${PEAK_STAT^^}=100)}"
 echo ""
 
 # 检查是否在运行
@@ -449,7 +477,7 @@ ORIGINAL=$(ensure_original "$BIN")
 cyan "[2/3] Patching..."
 cp "$ORIGINAL" "$BIN"
 chmod +x "$BIN"
-patch_binary "$BIN" "$SALT_NUM" "$MAXSTATS"
+patch_binary "$BIN" "$SALT_NUM" "$MAXSTATS" "$PEAK_STAT"
 
 # Step 3: 清除旧宠物
 cyan "[3/3] 清除旧宠物数据..."
