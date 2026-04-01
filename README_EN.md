@@ -57,16 +57,27 @@ The companion's "bones" (species, rarity, stats) are regenerated from `hash(user
 ## Installation
 
 ```bash
-cp claude-buddy-swap ~/.local/bin/
-chmod +x ~/.local/bin/claude-buddy-swap
+# Recommended: Python version (cross-platform — Linux / macOS / Windows)
+cp claude-buddy-swap.py ~/.local/bin/claude-buddy-swap.py
+chmod +x ~/.local/bin/claude-buddy-swap.py
+
+# Or run directly
+python3 claude-buddy-swap.py 9187
+```
+
+**Windows (PowerShell):**
+```powershell
+copy claude-buddy-swap.py $env:USERPROFILE\.local\bin\claude-buddy-swap.py
+python claude-buddy-swap.py 9187
 ```
 
 ### Requirements
 
-- **Claude Code** — Linux, Bun-compiled binary at `~/.local/share/claude/versions/`
-- **Bun** (`~/.bun/bin/bun`) — required for `--list` leaderboard calculation (uses `Bun.hash` to accurately simulate Wyhash)
-- **Python 3** — for binary patching and config file operations
-- **fuser** (procps) — for detecting whether Claude is running
+- **Python 3.8+** — main script runtime
+- **Claude Code** — binary installed at `~/.local/share/claude/versions/`
+- **Bun** (optional) — only needed for `--list` leaderboard (uses `Bun.hash` for Wyhash simulation)
+
+> The legacy bash script `claude-buddy-swap` is still included for Linux/macOS users who prefer it.
 
 ## Usage
 
